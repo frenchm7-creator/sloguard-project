@@ -1,0 +1,11 @@
+# Optional remote state to run scripts/bootstrap-tfstate.sh by pasting the values it prints,
+# then rename this file to backend.tf and run `terraform init -migrate-state`.
+terraform {
+  backend "azurerm" {
+    resource_group_name  = "rg-sloguard-tfstate"
+    storage_account_name = "REPLACE_ME"
+    container_name       = "tfstate"
+    key                  = "dev.terraform.tfstate"
+    use_azuread_auth     = true
+  }
+}

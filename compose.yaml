@@ -1,0 +1,73 @@
+# Local stack = service + load + Prometheus + Alertmanager + webhook sink + Grafana.
+name: sloguard
+
+x-app: &app
+  build:
+    context: ./app
+    args:
+      VERSION: local
+  image: sloguard:local
+
+services:
+  ledger:
+    <<: *app
+    environment:
+      ENABLE_FAULT_INJECTION: "true"   # local only; never enabled in the Azure deployment by default
+    ports: ["8080:8080"]
+    healthcheck:
+      test: ["CMD", "/ledger", "-healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  loadgen:
+    <<: *app
+    entrypoint: ["/loadgen"]
+    environment:
+      TARGET: http://ledger:8080
+      RPS: "20"
+    depends_on:
+      ledger: {condition: service_healthy}
+    restart: unless-stopped
+
+  alertsink:
+    <<: *app
+    entrypoint: ["/alertsink"]
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=30d
+      - --web.enable-lifecycle
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/prometheus/rules:/etc/prometheus/rules:ro
+      - ./observability/prometheus/targets:/etc/prometheus/targets:ro
+      - ./observability/prometheus/secrets:/etc/prometheus/secrets:ro
+    ports: ["9090:9090"]
+    depends_on: [ledger, alertmanager]
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    volumes:
+      - ./observability/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    ports: ["9093:9093"]
+    depends_on: [alertsink]
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"      # local demo only
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["3000:3000"]
+    depends_on: [prometheus]
+    restart: unless-stopped

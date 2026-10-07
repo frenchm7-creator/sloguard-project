@@ -1,0 +1,36 @@
+# `make rules` turns this into Prometheus recording rules + multiwindow,
+# has multi burn rate alerts (Google SRE Workbook, ch. 5). CI also fails if the
+# committed rules drift from this file.
+version: 1
+
+# Burn rate = (observed error ratio) / (error budget ratio).
+# 1x burns exactly the whole budget over the SLO window.
+burn_policy:
+  - {name: fast,    burn_rate: 14.4, long: 1h, short: 5m,  for: 1m,  severity: page}    # 2% of a 30d budget in 1h
+  - {name: medium,  burn_rate: 6,    long: 6h, short: 30m, for: 5m,  severity: page}    # 5% in 6h
+  - {name: slow,    burn_rate: 3,    long: 1d, short: 2h,  for: 15m, severity: ticket}  # 10% in 1d
+  - {name: trickle, burn_rate: 1,    long: 3d, short: 6h,  for: 1h,  severity: ticket}  # 10% in 3d
+
+slos:
+  - name: ledger-availability
+    description: 99.9% of POST /pay requests are not server errors (5xx).
+    objective: 99.9
+    window: 30d
+    sli:
+      kind: availability
+      metric: http_requests_total
+      selector: 'job=~"ledger.*",route="/pay"'
+      error_matcher: 'code=~"5.."'
+
+  - name: ledger-latency
+    description: 99% of POST /pay requests complete in under 300ms.
+    objective: 99.0
+    window: 30d
+    sli:
+      kind: latency
+      metric: http_request_duration_seconds
+      selector: 'job=~"ledger.*",route="/pay"'
+      threshold_seconds: 0.3
+      # Must mirror internal/metrics.DefaultBuckets; the generator refuses a
+      # threshold that is not an exact bucket boundary (otherwise the SLI is silently wrong).
+      buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.3, 0.5, 1, 2.5, 5]

@@ -1,0 +1,109 @@
+# Run: make test-rules   (promtool test rules)
+# Input series use promtool notation: '0+95x120' = start 0, +95 each interval, 121 samples.
+rule_files:
+  - ../rules/slo.rules.yml
+evaluation_interval: 1m
+
+tests:
+  # 1) 5% errors for an hour+ (burn rate 50x on a 0.1% budget): both page alerts must fire.
+  - name: sustained 5 percent errors pages
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="ledger", route="/pay", method="POST", code="200"}'
+        values: '0+95x120'
+      - series: 'http_requests_total{job="ledger", route="/pay", method="POST", code="503"}'
+        values: '0+5x120'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: SLOBurnFast
+        exp_alerts:
+          - exp_labels: {severity: page, slo: ledger-availability}
+            exp_annotations:
+              summary: 'ledger-availability: burning error budget 14.4x too fast (page)'
+              description: 'Error ratio over 1h is 5% (budget 0.1%). At this rate the 30d budget is gone in about 2.1d. Runbook: docs/runbook.md#ledger-availability'
+      - eval_time: 70m
+        alertname: SLOBurnMedium
+        exp_alerts:
+          - exp_labels: {severity: page, slo: ledger-availability}
+            exp_annotations:
+              summary: 'ledger-availability: burning error budget 6x too fast (page)'
+              description: 'Error ratio over 6h is 5% (budget 0.1%). At this rate the 30d budget is gone in about 5.0d. Runbook: docs/runbook.md#ledger-availability'
+
+  # 2) The reason for the short window: errors for 20 minutes, then fixed.
+  #    At t=30m the 1h ratio is still above threshold (~3%) but the 5m ratio is 0,
+  #    so the page must NOT fire (no paging for an incident that already ended).
+  - name: resolved incident does not page
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="ledger", route="/pay", method="POST", code="200"}'
+        values: '0+95x120'
+      - series: 'http_requests_total{job="ledger", route="/pay", method="POST", code="503"}'
+        values: '0+5x20 100+0x100'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: SLOBurnFast
+        exp_alerts:
+          - exp_labels: {severity: page, slo: ledger-availability}
+            exp_annotations:
+              summary: 'ledger-availability: burning error budget 14.4x too fast (page)'
+              description: 'Error ratio over 1h is 5% (budget 0.1%). At this rate the 30d budget is gone in about 2.1d. Runbook: docs/runbook.md#ledger-availability'
+      - eval_time: 30m
+        alertname: SLOBurnFast
+        exp_alerts: []
+
+  # 3) Healthy: 0.05% errors is half the budget rate (0.5x). Nothing may fire.
+  - name: healthy service is silent
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="ledger", route="/pay", method="POST", code="200"}'
+        values: '0+9995x200'
+      - series: 'http_requests_total{job="ledger", route="/pay", method="POST", code="500"}'
+        values: '0+5x200'
+    alert_rule_test:
+      - eval_time: 190m
+        alertname: SLOBurnFast
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: SLOBurnMedium
+        exp_alerts: []
+      - eval_time: 190m
+        alertname: SLOBurnSlow
+        exp_alerts: []
+
+  # 4) The classic empty-numerator trap: no 5xx series has ever existed.
+  #    The error ratio must evaluate to 0, not to "no data".
+  - name: zero errors yields zero not no-data
+    interval: 1m
+    input_series:
+      - series: 'http_requests_total{job="ledger", route="/pay", method="POST", code="200"}'
+        values: '0+100x30'
+    promql_expr_test:
+      - expr: slo:sli_error:ratio_rate5m{slo="ledger-availability"}
+        eval_time: 10m
+        exp_samples:
+          - labels: 'slo:sli_error:ratio_rate5m{slo="ledger-availability"}'
+            value: 0
+      - expr: slo:error_budget:ratio{slo="ledger-availability"}
+        eval_time: 10m
+        exp_samples:
+          - labels: 'slo:error_budget:ratio{slo="ledger-availability"}'
+            value: 0.001
+
+  # 5) Latency SLO: 20% of requests slower than 300ms (budget is 1%, burn 20x) pages.
+  - name: slow requests page the latency slo
+    interval: 1m
+    input_series:
+      - series: 'http_request_duration_seconds_bucket{job="ledger", route="/pay", le="0.3"}'
+        values: '0+80x120'
+      - series: 'http_request_duration_seconds_bucket{job="ledger", route="/pay", le="+Inf"}'
+        values: '0+100x120'
+      - series: 'http_request_duration_seconds_count{job="ledger", route="/pay"}'
+        values: '0+100x120'
+    alert_rule_test:
+      - eval_time: 70m
+        alertname: SLOBurnFast
+        exp_alerts:
+          - exp_labels: {severity: page, slo: ledger-latency}
+            exp_annotations:
+              summary: 'ledger-latency: burning error budget 14.4x too fast (page)'
+              description: 'Error ratio over 1h is 20% (budget 1%). At this rate the 30d budget is gone in about 2.1d. Runbook: docs/runbook.md#ledger-latency'

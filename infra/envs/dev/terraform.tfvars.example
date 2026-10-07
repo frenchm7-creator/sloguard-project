@@ -1,0 +1,4 @@
+# cp terraform.tfvars.example terraform.tfvars   (terraform.tfvars is git-ignored)
+# Use the tag CI printed / the GitHub "Packages" page shows: sha-<7 chars>
+image    = "ghcr.io/github_username/sloguard:sha-REPLACE"
+location = "westus3"
